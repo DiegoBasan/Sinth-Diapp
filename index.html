@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="es" data-theme="">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MVAVE Synth Lab — sintetizador y laboratorio de acordes para el M-VAVE SMK-25</title>
+  <meta name="description" content="Sintetizador web con Web MIDI para el M-VAVE SMK-25: perillas y pads mapeados, piano virtual en tiempo real, detección de acordes, sugerencias de progresión, arpegiador, caja de ritmos, eco y reverberación.">
+  <meta name="theme-color" content="#0a0c14">
+  <meta property="og:title" content="MVAVE Synth Lab">
+  <meta property="og:description" content="Sintetizador, detector de acordes y laboratorio de armonía para el M-VAVE SMK-25.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230a0c14'/><rect x='18' y='22' width='13' height='56' rx='3' fill='%235eead4'/><rect x='34' y='22' width='13' height='56' rx='3' fill='%23a78bfa'/><rect x='50' y='22' width='13' height='56' rx='3' fill='%23f472b6'/><rect x='66' y='22' width='13' height='56' rx='3' fill='%23e7ebf5'/></svg>">
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+
+  <main class="layout">
+    <div class="col" id="colLeft"></div>
+    <aside class="col" id="colRight"></aside>
+  </main>
+
+  <footer class="site">
+    MVAVE Synth Lab · Web Audio + Web MIDI, sin dependencias · funciona mejor en Chrome, Edge u Opera
+  </footer>
+
+  <div id="pianoDock" style="position: sticky; bottom: 0; z-index: 30; padding: 0 16px 12px;"></div>
+
+  <noscript style="display:block;padding:40px;text-align:center;color:#98a1bd">
+    Esta aplicación necesita JavaScript activado.
+  </noscript>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
