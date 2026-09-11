@@ -537,6 +537,9 @@ export class SynthEngine extends EventTarget {
     this.monoStack = [];
     this.lastNote = null;
     this.bpm = 120;
+    this.mode = 'synth';   // 'synth' | 'piano'
+    this.sampler = null;   // piano por muestras
+    this.fxOnPiano = true;
   }
 
   init(params) {
@@ -586,6 +589,33 @@ export class SynthEngine extends EventTarget {
   resume() {
     if (this.ctx && this.ctx.state !== 'running') return this.ctx.resume();
     return Promise.resolve();
+  }
+
+  // El piano por muestras se enchufa al mismo bus que el sintetizador, así que
+  // comparte efectos, limitador, analizador y grabación sin tocar nada más.
+  attachSampler(sampler) {
+    this.sampler = sampler;
+    this.routeSampler(this.fxOnPiano);
+  }
+
+  routeSampler(throughFx) {
+    if (!this.sampler) return;
+    this.fxOnPiano = !!throughFx;
+    try { this.sampler.out.disconnect(); } catch (e) { /* aún sin conectar */ }
+    this.sampler.out.connect(throughFx ? this.fx.input : this.master);
+  }
+
+  get usingSampler() { return this.mode === 'piano' && this.sampler && this.sampler.buffers.size > 0; }
+
+  setMode(mode) {
+    if (mode === this.mode) return;
+    const t = now(this.ctx);
+    for (const v of [...this.voices]) v.kill(t);
+    if (this.sampler) this.sampler.allNotesOff(t);
+    this.held.clear();
+    this.monoStack = [];
+    this.mode = mode;
+    this.dispatchEvent(new CustomEvent('mode', { detail: { mode } }));
   }
 
   setWave(osc, name) {
@@ -648,10 +678,12 @@ export class SynthEngine extends EventTarget {
     this.bendCents = this.bendValue * this.params.bendRange * 100;
     const t = now(this.ctx);
     for (const voice of this.voices) voice.setBend(this.bendCents, t);
+    if (this.sampler) this.sampler.setBend(this.bendCents, t);
   }
 
   setSustain(on) {
     this.sustain = on;
+    if (this.sampler) this.sampler.setSustain(on);
     if (!on) {
       const t = now(this.ctx);
       for (const v of this.voices) if (v.sustained && !this.held.has(v.note)) v.release(t);
@@ -663,6 +695,12 @@ export class SynthEngine extends EventTarget {
     const t = time != null ? time : now(this.ctx);
     const p = this.params;
     this.held.add(note);
+    if (this.usingSampler) {
+      this.sampler.noteOn(note, velocity, t);
+      this.lastNote = note;
+      this.dispatchEvent(new CustomEvent('noteon', { detail: { note, velocity, time: t } }));
+      return;
+    }
     if (p.mono) {
       this.monoStack = this.monoStack.filter((n) => n !== note);
       this.monoStack.push(note);
@@ -695,6 +733,11 @@ export class SynthEngine extends EventTarget {
     const t = time != null ? time : now(this.ctx);
     this.held.delete(note);
     const p = this.params;
+    if (this.usingSampler) {
+      this.sampler.noteOff(note, t);
+      this.dispatchEvent(new CustomEvent('noteoff', { detail: { note, time: t } }));
+      return;
+    }
     if (p.mono) {
       this.monoStack = this.monoStack.filter((n) => n !== note);
       const cur = this.voices.find((v) => !v.released);
@@ -716,10 +759,11 @@ export class SynthEngine extends EventTarget {
   allNotesOff() {
     const t = now(this.ctx);
     for (const v of [...this.voices]) v.kill(t);
+    if (this.sampler) this.sampler.allNotesOff(t);
     this.held.clear();
     this.monoStack = [];
     this.dispatchEvent(new CustomEvent('allnotesoff'));
   }
 
-  get activeVoices() { return this.voices.length; }
+  get activeVoices() { return this.voices.length + (this.sampler ? this.sampler.activeVoices : 0); }
 }

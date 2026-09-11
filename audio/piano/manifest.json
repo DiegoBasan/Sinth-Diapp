@@ -1,0 +1,13 @@
+{
+  "name": "Salamander Grand Piano v3",
+  "instrument": "Yamaha C5",
+  "author": "Alexander Holm",
+  "license": "CC-BY 3.0",
+  "source": "https://archive.org/details/SalamanderGrandPianoV3",
+  "encoding": "mp3 vía @tonejs/piano (MIT, Yotam Mann)",
+  "notes": ["A0","C1","Ds1","Fs1","A1","C2","Ds2","Fs2","A2","C3","Ds3","Fs3","A3","C4","Ds4","Fs4","A4","C5","Ds5","Fs5","A5","C6","Ds6","Fs6","A6","C7","Ds7","Fs7","A7","C8"],
+  "layers": [3, 7, 11, 15],
+  "layersOf": 16,
+  "releases": 88,
+  "lowestKey": 21
+}

@@ -87,13 +87,14 @@ select, input[type='text'], input[type='number'] {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px;
   padding: 7px 9px; font-size: 12.5px; max-width: 220px;
 }
+.topbar > select { max-width: 165px; }
 select:focus, input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
 label.field { display: inline-flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--txt-faint); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
 
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); flex: none; box-shadow: 0 0 8px currentColor; color: var(--bad); }
 .status-dot.ok { background: var(--ok); color: var(--ok); }
 .status-dot.warn { background: var(--warn); color: var(--warn); }
-.status-text { font-size: 12px; color: var(--txt-dim); max-width: 42vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-text { font-size: 12px; color: var(--txt-dim); max-width: 16vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- Estructura ---------- */
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 14px; padding: 14px 16px 0; align-items: start; }
@@ -290,3 +291,33 @@ footer.site { padding: 18px 16px 28px; text-align: center; color: var(--txt-fain
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- Selector de instrumento y piano por muestras ---------- */
+.instrument-seg button { padding: 6px 11px; font-size: 12px; font-weight: 600; }
+.instrument-seg button.on { background: color-mix(in srgb, var(--accent-2) 24%, transparent); color: var(--accent-2); }
+body[data-instrument='piano'] .instrument-seg button.on { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+
+.panel.dimmed { opacity: .55; }
+.panel.dimmed > header { opacity: 1; }
+.panel.dimmed > header::after {
+  content: 'en pausa · está sonando el piano clásico';
+  margin-left: auto; font-size: 10.5px; font-weight: 600; color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-radius: 20px; padding: 2px 8px;
+}
+.panel-note { margin: 10px 0 0; font-size: 11px; line-height: 1.55; color: var(--txt-faint); }
+.panel-note b { color: var(--txt-dim); }
+
+.load-bar { height: 6px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.load-fill { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .25s; }
+.load-text { margin-top: 6px; font-size: 11.5px; color: var(--txt-dim); }
+.piano-status.loading .load-text { color: var(--warn); }
+
+/* La cabecera se queda en una sola fila en pantallas de portátil */
+@media (max-width: 1460px) { .status-text { display: none; } }
+@media (max-width: 1280px) {
+  .topbar { gap: 7px; }
+  .topbar .btn { padding: 6px 9px; font-size: 12px; }
+  .topbar > select { max-width: 132px; }
+  .brand small { display: none; }
+}

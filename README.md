@@ -8,6 +8,19 @@ Sintetizador, detector de acordes y laboratorio de armonía para el **M-VAVE SMK
 
 ## Qué hace
 
+### Dos instrumentos
+
+- **Sintetizador**: el motor de síntesis sustractiva descrito abajo.
+- **Piano clásico**: un Yamaha C5 muestreado, el *Salamander Grand Piano v3* de Alexander Holm
+  (CC-BY 3.0). Treinta notas por capa, una cada tercera menor, en cuatro dinámicas, más el ruido
+  de apagador de cada una de las 88 teclas. Incluye afinación estirada, apagadores que frenan más
+  despacio en los graves, pedal de sostenido, sordina y tres ambientes de sala.
+  Las muestras (unos 23 MB) se descargan solo la primera vez que entras al modo piano, y puedes
+  empezar a tocar en cuanto llega la primera dinámica.
+
+El resto de la aplicación funciona igual con cualquiera de los dos: análisis de acordes,
+sugerencias, arpegio, looper, pads y caja de ritmos.
+
 ### Sintetizador
 - Dos osciladores con ocho formas de onda (sierra, cuadrada, triángulo, seno, dos pulsos, órgano y cristal), unísono de hasta 7 voces con apertura estéreo, sub-oscilador y generador de ruido.
 - Filtro multimodo (paso bajo, paso alto, paso banda y notch) con resonancia, envolvente propia ADSR y seguimiento de teclado.
@@ -90,6 +103,7 @@ También funciona con el ratón sobre el piano y con el teclado de la computador
 | --- | --- |
 | `A` `W` `S` `E` `D` `F` `T` `G` `Y` `H` `U` `J` `K` … | Tocar notas |
 | `Z` / `X` | Bajar / subir una octava |
+| `I` | Cambiar entre sintetizador y piano clásico |
 | `C` | Sostener el acorde |
 | `V` | Arpegio |
 | `1`–`9` | Escuchar la sugerencia correspondiente |
@@ -112,9 +126,19 @@ python3 -m http.server 8000
 
 Cada push a `main` dispara el flujo de `.github/workflows/pages.yml`, que sube el repositorio entero a GitHub Pages. Para activarlo la primera vez: **Settings → Pages → Source: GitHub Actions**.
 
+## Créditos y licencias
+
+El código es de este repositorio. Las muestras del piano son el
+[**Salamander Grand Piano v3**](https://archive.org/details/SalamanderGrandPianoV3) de
+**Alexander Holm**, publicadas bajo [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/);
+los MP3 incluidos vienen del proyecto [@tonejs/piano](https://github.com/tambien/Piano) de
+Yotam Mann (código MIT), que recortó y codificó los originales. Los detalles están en
+[`audio/piano/CREDITOS.md`](audio/piano/CREDITOS.md).
+
 ## Estructura
 
 ```
+audio/piano/        Muestras del Salamander Grand Piano (CC-BY 3.0)
 index.html          Estructura mínima; la interfaz se construye desde JavaScript
 css/style.css       Estilos, temas claro y oscuro
 js/theory.js        Notas, acordes, escalas, tonalidad, grados y sugerencias
@@ -123,6 +147,7 @@ js/midi.js          Web MIDI: dispositivos y parseo de mensajes
 js/controller.js    Mapa del SMK-25, destinos asignables y MIDI Learn
 js/arp.js           Reloj, arpegiador, secuenciador y looper
 js/presets.js       Presets de fábrica y generador aleatorio
+js/sampler.js       Piano clásico por muestras (Salamander Grand Piano)
 js/piano.js         Teclado virtual en SVG
 js/visualizer.js    Osciloscopio y espectro
 js/ui.js            Perillas, círculo de quintas, avisos y modales
