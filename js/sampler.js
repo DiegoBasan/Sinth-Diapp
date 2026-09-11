@@ -1,35 +1,58 @@
 // ---------------------------------------------------------------------------
-// sampler.js — piano clásico por muestras (Salamander Grand Piano v3, CC-BY 3.0).
+// sampler.js — reproductor de instrumentos muestreados.
 //
-// Las muestras están cada tercera menor, así que ninguna nota queda a más de un
-// semitono de su muestra y el desplazamiento de afinación es inaudible. Hay
-// cuatro capas de dinámica y una muestra de soltado por cada una de las 88 teclas.
+// Sirve tanto para sets con varias capas de dinámica y ruido de teclado
+// (Salamander) como para sets cromáticos de una sola capa (FluidR3 GM).
 // ---------------------------------------------------------------------------
+import { INSTRUMENT_BY_ID, DEFAULT_INSTRUMENT, sampleNameToMidi, layersFor, suggestQuality } from './instruments.js';
 
-export const SAMPLE_NOTES = ['A0', 'C1', 'Ds1', 'Fs1', 'A1', 'C2', 'Ds2', 'Fs2', 'A2', 'C3', 'Ds3', 'Fs3', 'A3',
-  'C4', 'Ds4', 'Fs4', 'A4', 'C5', 'Ds5', 'Fs5', 'A5', 'C6', 'Ds6', 'Fs6', 'A6', 'C7', 'Ds7', 'Fs7', 'A7', 'C8'];
+export { sampleNameToMidi };
 
-// Capa (de 16) y la velocidad MIDI que representa: (capa - 0.5) / 16.
-export const LAYERS = [
-  { id: 3, vel: 20, name: 'pianissimo' },
-  { id: 7, vel: 52, name: 'mezzopiano' },
-  { id: 11, vel: 84, name: 'mezzoforte' },
-  { id: 15, vel: 116, name: 'fortissimo' },
-];
-const LOWEST_KEY = 21; // A0
-const HIGHEST_KEY = 108; // C8
-const PC = { C: 0, Cs: 1, D: 2, Ds: 3, E: 4, F: 5, Fs: 6, G: 7, Gs: 8, A: 9, As: 10, B: 11 };
-
-export function sampleNameToMidi(name) {
-  const m = /^([A-G]s?)(-?\d)$/.exec(name);
-  if (!m) return null;
-  return PC[m[1]] + (parseInt(m[2], 10) + 1) * 12;
-}
+// Nivel del clic de la tecla contra el teclado. Es un ruido mecánico que en un
+// piano real apenas se percibe, así que va muy por debajo de la nota.
+const KEY_CLICK_BASE = 0.02;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rand = (a, b) => a + Math.random() * (b - a);
+
+// Las muestras de piano acaban en una cola larguísima por debajo del umbral de
+// audición. Recortarla a -60 dBFS, con un desvanecido corto, no cambia nada de
+// lo que se oye y ahorra cientos de megas de memoria descodificada.
+const SILENCE = 0.001;   // ≈ -60 dBFS
+const FADE_SEC = 0.18;
+
+function trimTail(ctx, buf) {
+  const chans = buf.numberOfChannels;
+  let last = 0;
+  for (let c = 0; c < chans; c++) {
+    const d = buf.getChannelData(c);
+    for (let i = d.length - 1; i > last; i--) {
+      if (Math.abs(d[i]) > SILENCE) { last = i; break; }
+    }
+  }
+  const fadeN = Math.max(1, Math.floor(FADE_SEC * buf.sampleRate));
+  const len = Math.min(buf.length, last + fadeN);
+  if (len < 256 || len > buf.length * 0.92) return buf; // no compensa copiar
+  const out = ctx.createBuffer(chans, len, buf.sampleRate);
+  for (let c = 0; c < chans; c++) {
+    const src = buf.getChannelData(c);
+    const dst = out.getChannelData(c);
+    dst.set(src.subarray(0, len));
+    const from = Math.max(0, len - fadeN);
+    for (let i = from; i < len; i++) dst[i] *= (len - i) / fadeN;
+  }
+  return out;
+}
+
+function bufferBytes(map) {
+  let n = 0;
+  for (const b of map.values()) n += b.length * b.numberOfChannels * 4;
+  return n;
+}
+const CACHE_BUDGET = 190 * 1024 * 1024; // memoria descodificada que se guarda
 
 // ---------------------------------------------------------------------------
-class PianoVoice {
+class SampleVoice {
   constructor(sampler, note, velocity, time) {
     const ctx = sampler.ctx;
     const pick = sampler.pickSample(note, velocity);
@@ -49,7 +72,7 @@ class PianoVoice {
     this.src.buffer = pick.buffer;
     this.src.playbackRate.value = pick.rate;
     // Afinación estirada: los pianos reales tensan los agudos y aflojan los graves.
-    this.src.detune.value = sampler.stretchCents(note);
+    this.src.detune.value = sampler.stretchCents(note) + (sampler.bendCents || 0);
     this.src.connect(this.gain);
     this.src.start(time);
     this.src.onended = () => this.dispose();
@@ -57,12 +80,11 @@ class PianoVoice {
   }
 
   // Al soltar, los apagadores frenan la cuerda: cuanto más grave, más tarda.
-  release(time, pedalHalf = 0) {
+  release(time) {
     if (this.released) return;
     this.released = true;
     this.sustained = false;
-    const base = this.sampler.damperTime(this.note);
-    const tc = base * (1 + pedalHalf * 5);
+    const tc = this.sampler.damperTime(this.note);
     const g = this.gain.gain;
     const now = Math.max(time, this.sampler.ctx.currentTime);
     if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(now);
@@ -95,28 +117,27 @@ class PianoVoice {
 }
 
 // ---------------------------------------------------------------------------
-export class PianoSampler extends EventTarget {
-  constructor(ctx, baseUrl = 'audio/piano/') {
+export class SampleInstrument extends EventTarget {
+  constructor(ctx, instrumentId = DEFAULT_INSTRUMENT) {
     super();
     this.ctx = ctx;
-    this.baseUrl = baseUrl;
-    this.buffers = new Map();   // "C4v11" -> AudioBuffer
-    this.releases = new Map();  // midi -> AudioBuffer
+    this.buffers = new Map();   // "C4v11" o "C4" -> AudioBuffer
+    this.releases = new Map();  // midi -> AudioBuffer del clic de tecla
+    this.cache = new Map();     // id -> { buffers, releases }  (los 3 últimos)
     this.voices = [];
-    this.held = new Map();      // midi -> PianoVoice
+    this.held = new Map();
     this.sustain = false;
     this.softPedal = false;
     this.ready = false;
     this.loading = false;
     this.progress = 0;
     this.maxVoices = 32;
-    this.opts = {
-      gain: 1,
-      tone: 12000,      // filtro de brillo
-      releaseNoise: 0.5, // ruido de apagador al soltar
-      stretch: 0.5,      // afinación estirada
-      dynamics: 1,       // curva de respuesta a la pulsación
-    };
+    this.bendCents = 0;
+    this.loadToken = 0;
+    this.quality = suggestQuality();
+    this.activeLayers = null;
+    this.dirty = false;   // la calidad cambió: hay que rehacer la carga
+    this.opts = { gain: 1, tone: 12000, releaseNoise: 1, stretch: 0.5, dynamics: 1 };
 
     this.out = ctx.createGain();
     this.noteBus = ctx.createGain();
@@ -129,97 +150,201 @@ export class PianoSampler extends EventTarget {
     this.noiseBus.gain.value = this.opts.releaseNoise;
     this.noteBus.connect(this.tone).connect(this.out);
     this.noiseBus.connect(this.out);
+
+    this.instrument = INSTRUMENT_BY_ID[instrumentId] || INSTRUMENT_BY_ID[DEFAULT_INSTRUMENT];
   }
 
   // -------------------------------------------------------------------------
-  // Carga progresiva: primero una capa media para poder tocar cuanto antes,
-  // después el resto en segundo plano.
+  // Carga
   // -------------------------------------------------------------------------
-  async load() {
-    if (this.loading || this.ready) return;
+  applyDefaults() {
+    for (const [k, v] of Object.entries(this.instrument.defaults || {})) this.setOption(k, v);
+  }
+
+  async load(instrumentId = null) {
+    const inst = instrumentId ? (INSTRUMENT_BY_ID[instrumentId] || this.instrument) : this.instrument;
+    if (!inst || !this.needsLoad(inst.id)) return;
+    this.dirty = false;
+
+    const token = ++this.loadToken;
+    this.allNotesOff();
+    this.instrument = inst;
+    this.ready = false;
+    this.applyDefaults();
+
+    // Un instrumento visto hace poco vuelve al instante, ya descodificado.
+    const cached = this.cache.get(inst.id);
+    if (cached) {
+      this.cache.delete(inst.id);
+      this.cache.set(inst.id, cached); // vuelve al final de la cola de descarte
+      this.buffers = cached.buffers;
+      this.releases = cached.releases;
+      this.ready = true;
+      this.progress = 1;
+      this.dispatchEvent(new CustomEvent('playable', { detail: { instrument: inst, cached: true } }));
+      this.dispatchEvent(new CustomEvent('loaded', { detail: { instrument: inst, samples: this.buffers.size, releases: this.releases.size, cached: true } }));
+      return;
+    }
+
     this.loading = true;
-    const order = [LAYERS[2], LAYERS[1], LAYERS[3], LAYERS[0]];
+    this.buffers = new Map();
+    this.releases = new Map();
+
     const jobs = [];
-    for (const layer of order) for (const note of SAMPLE_NOTES) jobs.push({ kind: 'note', note, layer: layer.id });
-    for (let k = 1; k <= 88; k++) jobs.push({ kind: 'rel', index: k });
+    if (inst.kind === 'layered') {
+      this.activeLayers = layersFor(inst, this.quality);
+      // Primero una capa intermedia, para poder tocar cuanto antes.
+      const order = [...this.activeLayers].sort((a, b) => Math.abs(a.vel - 84) - Math.abs(b.vel - 84));
+      for (const layer of order) for (const note of inst.notes) jobs.push({ url: `${inst.dir}${note}v${layer.id}.mp3`, key: `${note}v${layer.id}` });
+    } else {
+      for (const note of inst.notes) jobs.push({ url: `${inst.dir}${note}.mp3`, key: note });
+    }
+    const playableAt = jobs.length ? (inst.kind === 'layered' ? inst.notes.length : jobs.length) : 0;
+    if (inst.kind !== 'layered') this.activeLayers = null;
+    for (let k = 1; k <= inst.releases; k++) jobs.push({ url: `${inst.dir}rel${k}.mp3`, rel: inst.lowest + k - 1 });
 
     let done = 0;
     const total = jobs.length;
-    const playableAt = SAMPLE_NOTES.length; // con la primera capa ya se puede tocar
-
     const fetchOne = async (job) => {
-      const url = job.kind === 'note' ? `${this.baseUrl}${job.note}v${job.layer}.mp3` : `${this.baseUrl}rel${job.index}.mp3`;
       try {
-        const res = await fetch(url);
+        const res = await fetch(job.url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const buf = await this.ctx.decodeAudioData(await res.arrayBuffer());
-        if (job.kind === 'note') this.buffers.set(`${job.note}v${job.layer}`, buf);
-        else this.releases.set(LOWEST_KEY + job.index - 1, buf);
+        const raw = await this.ctx.decodeAudioData(await res.arrayBuffer());
+        if (token !== this.loadToken) return;
+        const buf = trimTail(this.ctx, raw);
+        if (job.rel != null) this.releases.set(job.rel, buf);
+        else this.buffers.set(job.key, buf);
       } catch (e) {
-        this.dispatchEvent(new CustomEvent('sampleerror', { detail: { url, message: e.message } }));
+        this.dispatchEvent(new CustomEvent('sampleerror', { detail: { url: job.url, message: e.message } }));
       }
+      if (token !== this.loadToken) return;
       done++;
-      this.progress = done / total;
-      if (done === playableAt && !this.ready) {
+      this.progress = total ? done / total : 1;
+      if (done >= playableAt && !this.ready) {
         this.ready = true;
-        this.dispatchEvent(new CustomEvent('playable'));
+        this.dispatchEvent(new CustomEvent('playable', { detail: { instrument: inst } }));
       }
-      this.dispatchEvent(new CustomEvent('progress', { detail: { done, total, ratio: this.progress } }));
+      this.dispatchEvent(new CustomEvent('progress', { detail: { done, total, ratio: this.progress, instrument: inst } }));
     };
 
-    // De seis en seis: rápido sin saturar la conexión.
-    for (let i = 0; i < jobs.length; i += 6) {
-      await Promise.all(jobs.slice(i, i + 6).map(fetchOne));
+    // De ocho en ocho: rápido sin saturar la conexión.
+    for (let i = 0; i < jobs.length; i += 8) {
+      if (token !== this.loadToken) return; // se cambió de instrumento a mitad
+      await Promise.all(jobs.slice(i, i + 8).map(fetchOne));
     }
+    if (token !== this.loadToken) return;
     this.loading = false;
     this.ready = this.buffers.size > 0;
-    this.dispatchEvent(new CustomEvent('loaded', { detail: { samples: this.buffers.size, releases: this.releases.size } }));
+    this.remember(inst.id);
+    this.dispatchEvent(new CustomEvent('loaded', { detail: { instrument: inst, samples: this.buffers.size, releases: this.releases.size } }));
+  }
+
+  // Guarda instrumentos ya descodificados para que volver a ellos sea
+  // instantáneo, pero solo mientras quepan en el presupuesto de memoria: los
+  // sets pesados se vuelven a pedir (el navegador los tiene en su caché HTTP).
+  remember(id) {
+    const bytes = bufferBytes(this.buffers) + bufferBytes(this.releases);
+    this.cache.delete(id);
+    if (bytes > CACHE_BUDGET) return;
+    this.cache.set(id, { buffers: this.buffers, releases: this.releases, bytes });
+    let total = 0;
+    for (const e of this.cache.values()) total += e.bytes;
+    while (total > CACHE_BUDGET && this.cache.size > 1) {
+      const oldest = this.cache.keys().next().value;
+      total -= this.cache.get(oldest).bytes;
+      this.cache.delete(oldest);
+    }
+  }
+
+  get memoryMB() {
+    let n = bufferBytes(this.buffers) + bufferBytes(this.releases);
+    for (const e of this.cache.values()) if (e.buffers !== this.buffers) n += e.bytes;
+    return Math.round(n / 1048576);
   }
 
   get loadedLayers() {
-    return LAYERS.filter((l) => this.buffers.has(`C4v${l.id}`) || this.buffers.has(`A4v${l.id}`));
+    const inst = this.instrument;
+    if (inst.kind !== 'layered') return [];
+    return (this.activeLayers || inst.layers).filter((l) => inst.notes.some((n) => this.buffers.has(`${n}v${l.id}`)));
   }
 
-  // Muestra más cercana en altura y en dinámica, entre las ya cargadas.
+  // ¿Hace falta descargar algo para tener listo este instrumento?
+  needsLoad(id) {
+    const inst = INSTRUMENT_BY_ID[id] || this.instrument;
+    if (!inst) return false;
+    return !(inst === this.instrument && !this.dirty && (this.ready || this.loading));
+  }
+
+  // Cambiar de calidad marca el set actual para recargarse, pero no descarga
+  // nada por su cuenta: lo pide quien corresponda cuando toque.
+  setQuality(quality) {
+    if (quality === this.quality) return false;
+    this.quality = quality;
+    if (!this.instrument || this.instrument.kind !== 'layered') return false;
+    this.cache.delete(this.instrument.id);
+    this.dirty = true;
+    return true;
+  }
+
+  // -------------------------------------------------------------------------
+  // Elección de muestra
+  // -------------------------------------------------------------------------
   pickSample(note, velocity) {
-    const midi = clamp(Math.round(note), LOWEST_KEY, HIGHEST_KEY);
+    const inst = this.instrument;
+    const midi = clamp(Math.round(note), inst.lowest, inst.highest);
     const v = clamp(velocity, 1, 127);
     const curved = Math.pow(v / 127, this.opts.dynamics) * 127;
+    const soft = this.softPedal ? 0.62 : 1;
 
-    const layers = this.loadedLayers.length ? this.loadedLayers : LAYERS;
-    let layer = layers[0];
-    for (const l of layers) if (Math.abs(l.vel - curved) < Math.abs(layer.vel - curved)) layer = l;
+    let layer = null;
+    let suffix = '';
+    if (inst.kind === 'layered') {
+      const layers = this.loadedLayers.length ? this.loadedLayers : (this.activeLayers || inst.layers);
+      layer = layers[0];
+      for (const l of layers) if (Math.abs(l.vel - curved) < Math.abs(layer.vel - curved)) layer = l;
+      suffix = `v${layer.id}`;
+    }
 
     let best = null;
-    for (const name of SAMPLE_NOTES) {
-      const key = `${name}v${layer.id}`;
+    for (const name of inst.notes) {
+      const key = name + suffix;
       if (!this.buffers.has(key)) continue;
       const d = Math.abs(sampleNameToMidi(name) - midi);
       if (!best || d < best.d) best = { d, key, midi: sampleNameToMidi(name) };
+      if (d === 0) break;
     }
-    if (!best) { // aún no ha llegado esa capa: usa cualquiera disponible
-      for (const [key, buf] of this.buffers) {
-        const name = key.split('v')[0];
-        const d = Math.abs(sampleNameToMidi(name) - midi);
-        if (!best || d < best.d) best = { d, key, midi: sampleNameToMidi(name), buffer: buf };
+    if (!best) { // esa capa aún no ha llegado: sirve cualquier muestra cargada
+      for (const key of this.buffers.keys()) {
+        const nm = key.replace(/v\d+$/, '');
+        const d = Math.abs(sampleNameToMidi(nm) - midi);
+        if (!best || d < best.d) best = { d, key, midi: sampleNameToMidi(nm) };
       }
     }
     if (!best) return null;
 
-    // Compensa la diferencia entre la dinámica pedida y la de la capa elegida.
-    const ratio = (curved + 6) / (layer.vel + 6);
-    const trim = clamp(Math.pow(ratio, 0.85), 0.35, 1.9);
-    const soft = this.softPedal ? 0.62 : 1;
+    let gain;
+    if (layer) {
+      // Con capas, la muestra ya trae el timbre correcto: solo se afina el nivel.
+      const ratio = (curved + 6) / (layer.vel + 6);
+      gain = clamp(Math.pow(ratio, 0.85), 0.35, 1.9) * 0.85;
+    } else if (inst.id === 'harpsichord') {
+      gain = 0.9; // el clavecín real no responde a la fuerza de la pulsación
+    } else {
+      // Con una sola capa, toda la dinámica tiene que salir del volumen.
+      gain = clamp(0.08 + Math.pow(curved / 127, 1.5) * 1.05, 0.08, 1.2);
+    }
+
     return {
-      buffer: best.buffer || this.buffers.get(best.key),
+      buffer: this.buffers.get(best.key),
       rate: Math.pow(2, (midi - best.midi) / 12),
-      gain: trim * soft * 0.85,
+      gain: gain * soft,
       layer,
     };
   }
 
   // Curva de afinación estirada (Railsback), suavizada.
   stretchCents(midi) {
+    if (!this.opts.stretch) return 0;
     const d = (midi - 60) / 12;
     return this.opts.stretch * Math.sign(d) * Math.pow(Math.abs(d), 2.2) * 3.2;
   }
@@ -229,10 +354,13 @@ export class PianoSampler extends EventTarget {
     return clamp(0.42 * Math.pow(2, -(midi - 36) / 38), 0.035, 0.55);
   }
 
+  // -------------------------------------------------------------------------
+  // Ejecución
+  // -------------------------------------------------------------------------
   noteOn(note, velocity = 90, time = null) {
     if (!this.buffers.size) return null;
     const t = time != null ? time : this.ctx.currentTime;
-    const midi = clamp(Math.round(note), LOWEST_KEY, HIGHEST_KEY);
+    const midi = clamp(Math.round(note), this.instrument.lowest, this.instrument.highest);
     const prev = this.held.get(midi);
     if (prev) prev.kill(t); // re-pulsación de la misma tecla
     while (this.voices.length >= this.maxVoices) {
@@ -241,7 +369,7 @@ export class PianoSampler extends EventTarget {
       const i = this.voices.indexOf(victim);
       if (i >= 0) this.voices.splice(i, 1);
     }
-    const voice = new PianoVoice(this, midi, velocity, t);
+    const voice = new SampleVoice(this, midi, velocity, t);
     this.voices.push(voice);
     this.held.set(midi, voice);
     return voice;
@@ -249,21 +377,22 @@ export class PianoSampler extends EventTarget {
 
   noteOff(note, time = null) {
     const t = time != null ? time : this.ctx.currentTime;
-    const midi = clamp(Math.round(note), LOWEST_KEY, HIGHEST_KEY);
+    const midi = clamp(Math.round(note), this.instrument.lowest, this.instrument.highest);
     const voice = this.held.get(midi);
     if (!voice) return;
     this.held.delete(midi);
-    if (this.sustain) { voice.sustained = true; this.voices.includes(voice) || this.voices.push(voice); return; }
+    if (this.sustain) { voice.sustained = true; return; }
     voice.release(t);
-    this.playRelease(midi, voice.velocity, t);
+    this.playKeyClick(midi, voice.velocity, t);
   }
 
-  // Ruido del macillo y el apagador al levantar la tecla.
-  playRelease(midi, velocity, time) {
+  // Clic mecánico de la tecla al volver a su sitio. Muy por debajo de la nota:
+  // se nota como cuerpo, no como un golpe.
+  playKeyClick(midi, velocity, time) {
     const buf = this.releases.get(midi);
     if (!buf || this.opts.releaseNoise <= 0) return;
     const g = this.ctx.createGain();
-    g.gain.value = clamp(0.25 + (velocity / 127) * 0.35, 0.1, 0.7);
+    g.gain.value = KEY_CLICK_BASE * (0.35 + (velocity / 127) * 0.65) * rand(0.6, 1);
     const src = this.ctx.createBufferSource();
     src.buffer = buf;
     src.connect(g).connect(this.noiseBus);
@@ -278,14 +407,14 @@ export class PianoSampler extends EventTarget {
     for (const v of [...this.voices]) {
       if (v.sustained && !this.held.has(v.note)) {
         v.release(t);
-        this.playRelease(v.note, v.velocity, t);
+        this.playKeyClick(v.note, v.velocity, t);
       }
     }
   }
 
   setSoftPedal(on) { this.softPedal = !!on; }
 
-  // El pitch bend también dobla las cuerdas del piano por muestras.
+  // El pitch bend también dobla las cuerdas del instrumento muestreado.
   setBend(cents, time = null) {
     const t = time != null ? time : this.ctx.currentTime;
     this.bendCents = cents;
@@ -312,3 +441,6 @@ export class PianoSampler extends EventTarget {
 
   get activeVoices() { return this.voices.length; }
 }
+
+// Nombre anterior, por compatibilidad.
+export { SampleInstrument as PianoSampler };

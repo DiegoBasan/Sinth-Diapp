@@ -9,7 +9,8 @@ import { KNOB_TARGETS, TARGET_BY_ID, DEFAULT_MAPPING, PAD_MODES, TRANSPORT_ACTIO
 import { Clock, ARP_MODES, ARP_DIV_LIST, DRUM_PATTERNS, DRUM_STEPS, emptyPattern } from './arp.js';
 import { Piano } from './piano.js';
 import { Visualizer } from './visualizer.js';
-import { PianoSampler, LAYERS as PIANO_LAYERS } from './sampler.js';
+import { SampleInstrument } from './sampler.js';
+import { INSTRUMENTS, INSTRUMENT_BY_ID, DEFAULT_INSTRUMENT, maxStretch, QUALITY, layersFor } from './instruments.js';
 import { h, $, $$, Knob, CircleOfFifths, toast, openModal } from './ui.js';
 
 const STORE = 'mvave-synth-lab-v1';
@@ -47,8 +48,12 @@ const state = {
   computerKeys: true,
   detectTimer: null,
   sampler: null,
-  instrument: 'synth',   // 'synth' | 'piano'
+  mode: 'synth',         // 'synth' | 'piano'
   pianoKnobs: [],
+  instrumentId: DEFAULT_INSTRUMENT,
+  quality: null,
+  samplerWired: false,
+  badSamples: [],
   savedFx: null,
 };
 
@@ -96,9 +101,14 @@ async function start() {
   clock.addEventListener('loop', () => refreshTransport());
   clock.addEventListener('state', () => refreshTransport());
 
-  state.sampler = new PianoSampler(engine.ctx, 'audio/piano/');
+  state.sampler = new SampleInstrument(engine.ctx, state.instrumentId);
+  if (state.quality) state.sampler.quality = state.quality; else state.quality = state.sampler.quality;
+  wireSampler();
+  $('#pianoQuality').value = state.quality;
   engine.attachSampler(state.sampler);
   buildPianoKnobs();
+  $('#instrumentSel').value = state.instrumentId;
+  describeInstrument(INSTRUMENT_BY_ID[state.instrumentId]);
   $('#panelPiano').classList.add('collapsed');
 
   state.viz = new Visualizer($('#viz'), engine.analyser);
@@ -135,8 +145,8 @@ function buildTopbar() {
       h('div', { class: 'brand-mark', text: 'M' }),
       h('div', {}, h('h1', { text: 'MVAVE Synth Lab' }), h('small', { text: 'SMK-25 · Web MIDI' }))),
     h('div', { class: 'seg instrument-seg', id: 'instrumentSeg' },
-      h('button', { class: 'on', dataset: { inst: 'synth' }, title: 'Sintetizador (tecla I)', text: '🎛 Sinte', onclick: () => setInstrument('synth') }),
-      h('button', { dataset: { inst: 'piano' }, title: 'Piano clásico muestreado (tecla I)', text: '🎹 Piano', onclick: () => setInstrument('piano') })),
+      h('button', { class: 'on', dataset: { inst: 'synth' }, title: 'Sintetizador (tecla I)', text: '🎛 Sinte', onclick: () => setSoundMode('synth') }),
+      h('button', { dataset: { inst: 'piano' }, title: 'Piano clásico muestreado (tecla I)', text: '🎹 Piano', onclick: () => setSoundMode('piano') })),
     h('div', { class: 'status-dot', id: 'midiDot' }),
     h('span', { class: 'status-text', id: 'midiStatus', text: 'Sin iniciar' }),
     h('select', { id: 'midiDevice', title: 'Dispositivo MIDI de entrada', onchange: (e) => state.midi && state.midi.select(e.target.value) },
@@ -197,17 +207,28 @@ function buildLayout() {
         h('button', { class: 'btn sm', text: '✨ Generar', onclick: generateProgression })),
     ], { id: 'panelProg' }),
 
-    panel('Piano clásico', 'Salamander Grand Piano · Yamaha C5 muestreado', [
+    panel('Instrumentos muestreados', 'Diez teclados reales, del gran cola a la caja de música', [
+      h('div', { class: 'ctl' },
+        h('span', { class: 'lbl', text: 'Instrumento' }),
+        h('select', { id: 'instrumentSel', onchange: (e) => pickInstrument(e.target.value) },
+          INSTRUMENTS.map((i) => h('option', { value: i.id, text: `${i.name} · ${i.size}` }))),
+        h('button', { class: 'btn sm', title: 'Probar un acorde con este instrumento', text: '▶', onclick: auditionInstrument })),
+      h('div', { class: 'inst-note', id: 'instrumentNote' }),
       h('div', { class: 'piano-status', id: 'pianoStatus' },
         h('div', { class: 'load-bar' }, h('div', { class: 'load-fill', id: 'pianoLoadFill' })),
         h('div', { class: 'load-text', id: 'pianoLoadText', text: 'Las muestras se descargan al entrar en modo piano.' })),
       h('div', { class: 'knob-row', id: 'pianoKnobs', style: { marginTop: '10px' } }),
+      h('div', { class: 'ctl', style: { flexWrap: 'wrap' } },
+        h('span', { class: 'lbl', text: 'Calidad' }),
+        h('select', { id: 'pianoQuality', onchange: (e) => setQuality(e.target.value) },
+          Object.values(QUALITY).map((q) => h('option', { value: q.id, text: `${q.name} · ${q.note}` }))),
+        h('span', { class: 'chip', id: 'pianoMem', title: 'Memoria que ocupan las muestras ya descodificadas' })),
       h('div', { class: 'ctl', style: { marginTop: '8px', flexWrap: 'wrap' } },
         h('span', { class: 'lbl', text: 'Sala' }),
         seg('pianoRoom', [['dry', 'Estudio'], ['hall', 'Concierto'], ['church', 'Iglesia']], 'hall', setPianoRoom),
         h('label', { class: 'toggle' }, h('input', { type: 'checkbox', id: 'pianoSoft', onchange: (e) => state.sampler && state.sampler.setSoftPedal(e.target.checked) }), 'Sordina (una corda)'),
         h('label', { class: 'toggle' }, h('input', { type: 'checkbox', id: 'pianoFx', checked: true, onchange: (e) => state.engine.routeSampler(e.target.checked) }), 'Pasar por los efectos')),
-      h('p', { class: 'panel-note', html: 'Muestras de <b>Alexander Holm</b> (Salamander Grand Piano v3, Yamaha C5) bajo licencia CC-BY 3.0. Treinta notas por capa, una cada tercera menor, en cuatro dinámicas, más el ruido de apagador de cada una de las 88 teclas.' }),
+      h('p', { class: 'panel-note', id: 'instrumentCredit' }),
     ], { id: 'panelPiano' }),
 
     panel('Motor de síntesis', 'Arrastra las perillas · Shift = fino · doble clic = valor por defecto', [
@@ -505,7 +526,7 @@ const PIANO_OPTS = [
   { key: 'gain', label: 'Volumen', min: 0, max: 1.6, fmt: (v) => `${Math.round(v * 100)}%` },
   { key: 'tone', label: 'Brillo', min: 900, max: 18000, curve: 'exp', fmt: (v) => v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz` },
   { key: 'dynamics', label: 'Dinámica', min: 0.5, max: 2.2, fmt: (v) => v.toFixed(2) },
-  { key: 'releaseNoise', label: 'Apagadores', min: 0, max: 1.2, fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'releaseNoise', label: 'Ruido de teclas', min: 0, max: 3, fmt: (v) => v <= 0.001 ? 'apagado' : `${Math.round(v * 100)}%` },
   { key: 'stretch', label: 'Afinación estirada', min: 0, max: 1.5, fmt: (v) => `${Math.round(v * 100)}%` },
 ];
 
@@ -545,9 +566,9 @@ function setPianoRoom(id) {
   syncAllControls();
 }
 
-function setInstrument(mode) {
-  if (state.instrument === mode) return;
-  state.instrument = mode;
+function setSoundMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
   for (const b of $$('#instrumentSeg button')) b.classList.toggle('on', b.dataset.inst === mode);
   document.body.dataset.instrument = mode;
   $('#panelPiano').classList.toggle('collapsed', mode !== 'piano');
@@ -562,7 +583,7 @@ function setInstrument(mode) {
   if (mode === 'piano') {
     // Guarda los efectos del sintetizador para devolverlos al volver.
     state.savedFx = JSON.parse(JSON.stringify(state.engine.params.fx));
-    loadPianoSamples();
+    loadInstrument();
     const room = $('#pianoRoom button.on');
     setPianoRoom(room ? room.dataset.value : 'hall');
     toast('Piano clásico');
@@ -577,33 +598,114 @@ function setInstrument(mode) {
   }
 }
 
-function loadPianoSamples() {
+// Los avisos del sampler se enganchan una sola vez, no en cada carga.
+function wireSampler() {
+  if (state.samplerWired) return;
+  state.samplerWired = true;
   const sampler = state.sampler;
-  if (sampler.ready || sampler.loading) return;
-  const fill = $('#pianoLoadFill'), text = $('#pianoLoadText');
-  const bad = [];
-  text.textContent = 'Descargando muestras del piano…';
-  $('#pianoStatus').classList.add('loading');
+  const fill = () => $('#pianoLoadFill');
+  const text = () => $('#pianoLoadText');
   sampler.addEventListener('progress', (e) => {
     const { done, total, ratio } = e.detail;
-    fill.style.width = `${Math.round(ratio * 100)}%`;
-    text.textContent = `Descargando muestras… ${done} de ${total}`;
+    fill().style.width = `${Math.round(ratio * 100)}%`;
+    text().textContent = `Descargando ${e.detail.instrument.name}… ${done} de ${total}`;
+    updateMemChip();
   });
-  sampler.addEventListener('sampleerror', (e) => bad.push(e.detail.url));
-  sampler.addEventListener('playable', () => {
-    text.textContent = 'Ya puedes tocar. Las dinámicas restantes siguen cargando…';
-    toast('Piano listo para tocar');
+  sampler.addEventListener('sampleerror', (e) => state.badSamples.push(e.detail.url));
+  sampler.addEventListener('playable', (e) => {
     buildPianoKnobs();
+    if (e.detail.cached) return;
+    const inst = e.detail.instrument;
+    text().textContent = inst.kind === 'layered'
+      ? 'Ya puedes tocar. Las demás dinámicas siguen cargando…'
+      : 'Ya puedes tocar.';
+    toast(`${inst.name} listo`);
   });
   sampler.addEventListener('loaded', (e) => {
-    $('#pianoStatus').classList.remove('loading');
-    fill.style.width = '100%';
     const d = e.detail;
-    text.textContent = bad.length
-      ? `${d.samples} muestras cargadas · ${bad.length} fallaron y se sustituyen por la nota más cercana`
-      : `${d.samples} muestras y ${d.releases} apagadores cargados · cuatro dinámicas completas`;
+    $('#pianoStatus').classList.remove('loading');
+    fill().style.width = '100%';
+    buildPianoKnobs();
+    updateMemChip();
+    const bad = state.badSamples.length;
+    const n = state.sampler.loadedLayers.length;
+    const layers = n > 1 ? `${n} dinámicas` : 'una dinámica';
+    text().textContent = bad
+      ? `${d.samples} muestras cargadas · ${bad} fallaron y se sustituyen por la nota más cercana`
+      : `${d.instrument.name}: ${d.samples} muestras${d.releases ? ` y ${d.releases} ruidos de tecla` : ''} · ${layers}`;
   });
-  sampler.load();
+}
+
+function describeInstrument(inst) {
+  const salto = maxStretch(inst);
+  const capas = inst.layers ? layersFor(inst, state.sampler ? state.sampler.quality : 'mid').length : 1;
+  const partes = [
+    inst.notes.length === 88 ? 'las 88 teclas muestreadas una por una' : `${inst.notes.length} notas por capa`,
+    capas > 1 ? `${capas} capas de dinámica` : 'una sola capa de dinámica',
+    salto === 0 ? 'sin desplazar la afinación' : `como mucho ${salto} semitono de desplazamiento`,
+  ];
+  const ficha = partes.join(' · ');
+  $('#instrumentNote').textContent = `${inst.note} ${ficha.charAt(0).toUpperCase()}${ficha.slice(1)}.`.trim();
+  $('#instrumentCredit').innerHTML = `Muestras: ${inst.credit}. Licencia ${inst.license}.`;
+  $('#pianoQuality').disabled = !inst.layers;
+  updateMemChip();
+}
+
+function updateMemChip() {
+  const chip = $('#pianoMem');
+  if (!chip || !state.sampler) return;
+  const mb = state.sampler.memoryMB;
+  chip.textContent = mb ? `${mb} MB en memoria` : '';
+}
+
+function setQuality(id) {
+  state.quality = id;
+  $('#pianoQuality').value = id;
+  saveStorage();
+  const inst = INSTRUMENT_BY_ID[state.instrumentId];
+  const needsReload = state.sampler.setQuality(id);
+  describeInstrument(inst);
+  if (!needsReload) {
+    toast(`Calidad ${QUALITY[id].name.toLowerCase()} para los sets con varias dinámicas`);
+  } else if (state.mode === 'piano') {
+    loadInstrument();
+  } else {
+    $('#pianoLoadText').textContent = `Calidad ${QUALITY[id].name.toLowerCase()}: se aplicará al entrar en modo piano.`;
+  }
+}
+
+function pickInstrument(id) {
+  const inst = INSTRUMENT_BY_ID[id];
+  if (!inst) return;
+  state.instrumentId = id;
+  $('#instrumentSel').value = id;
+  saveStorage();
+  describeInstrument(inst);
+  if (state.mode !== 'piano') { setSoundMode('piano'); return; }
+  loadInstrument();
+}
+
+function loadInstrument() {
+  const sampler = state.sampler;
+  const inst = INSTRUMENT_BY_ID[state.instrumentId];
+  if (!sampler.needsLoad(inst.id)) { updateMemChip(); return; }
+  state.badSamples = [];
+  $('#pianoStatus').classList.add('loading');
+  $('#pianoLoadFill').style.width = '0%';
+  $('#pianoLoadText').textContent = `Descargando ${inst.name}…`;
+  sampler.load(inst.id);
+}
+
+// Toca un acorde de muestra para comparar instrumentos sin soltar el ratón.
+function auditionInstrument() {
+  if (state.mode !== 'piano') { setSoundMode('piano'); return; }
+  const notes = [48, 55, 64, 67, 72];
+  if (!state.sampler.ready) { toast('Todavía se están descargando las muestras'); return; }
+  notes.forEach((n, i) => setTimeout(() => {
+    state.sampler.noteOn(n, 88);
+    state.piano.noteOn(n, 'arp');
+    setTimeout(() => { state.sampler.noteOff(n); if (!state.held.has(n)) state.piano.noteOff(n); }, 1600 - i * 90);
+  }, i * 70));
 }
 
 // ---------------------------------------------------------------------------
@@ -1308,7 +1410,11 @@ function openPresetIO() {
 
 function saveStorage() {
   try {
-    localStorage.setItem(STORE, JSON.stringify({ mapping: state.mapping, presets: state.userPresets, theme: document.documentElement.dataset.theme || '' }));
+    localStorage.setItem(STORE, JSON.stringify({
+      mapping: state.mapping, presets: state.userPresets,
+      theme: document.documentElement.dataset.theme || '',
+      instrumentId: state.instrumentId, quality: state.quality,
+    }));
   } catch (e) { /* almacenamiento no disponible */ }
 }
 function loadStorage() {
@@ -1317,6 +1423,8 @@ function loadStorage() {
     if (raw.mapping) state.mapping = { ...state.mapping, ...raw.mapping };
     if (Array.isArray(raw.presets)) state.userPresets = raw.presets;
     if (raw.theme) document.documentElement.dataset.theme = raw.theme;
+    if (raw.instrumentId && INSTRUMENT_BY_ID[raw.instrumentId]) state.instrumentId = raw.instrumentId;
+    if (raw.quality && QUALITY[raw.quality]) state.quality = raw.quality;
   } catch (e) { /* ignorar */ }
 }
 function toggleTheme() {
@@ -1375,7 +1483,7 @@ function onKeyDown(e) {
   if (e.code === 'KeyX') { setOctave(state.octave + 1); return; }
   if (e.code === 'KeyC') { toggleHold(); return; }
   if (e.code === 'KeyV') { toggleArp(); return; }
-  if (e.code === 'KeyI') { setInstrument(state.instrument === 'piano' ? 'synth' : 'piano'); return; }
+  if (e.code === 'KeyI') { setSoundMode(state.mode === 'piano' ? 'synth' : 'piano'); return; }
   if (/^Digit[1-9]$/.test(e.code)) {
     const i = +e.code.slice(5) - 1;
     const s = state.suggestions[i];
@@ -1420,12 +1528,13 @@ function showHelp() {
       <li><b>Cambiar preset</b> y <b>Transporte</b> (arpegio, retener, loop, metrónomo, octavas).</li>
     </ul>
     <p>Shift + clic sobre un pad de la pantalla para aprender la nota que envía tu pad físico.</p>
-    <h4>Piano clásico</h4>
+    <h4>Piano clásico y otros teclados</h4>
     <ul>
-      <li>El botón <b>🎹 Piano clásico</b> de arriba (o la tecla <kbd>I</kbd>) cambia el generador de sonido: en vez del sintetizador suena un Yamaha C5 muestreado, el <i>Salamander Grand Piano</i> de Alexander Holm.</li>
-      <li>Las muestras se descargan solo la primera vez que entras al modo piano, unos 23 MB. Puedes empezar a tocar en cuanto termina la primera dinámica; el resto sigue cargando en segundo plano.</li>
-      <li>Hay cuatro capas de dinámica, así que la fuerza con la que tocas cambia el timbre y no solo el volumen. La perilla <b>Dinámica</b> ajusta cuánto responde.</li>
-      <li><b>Apagadores</b> controla el ruido real de cada tecla al soltarla, y <b>Afinación estirada</b> imita la afinación de un piano de cola, con los graves algo bajos y los agudos algo altos.</li>
+      <li>El botón <b>🎹 Piano</b> de arriba (o la tecla <kbd>I</kbd>) cambia el generador de sonido: en vez del sintetizador suena un instrumento muestreado.</li>
+      <li>Hay diez instrumentos en el desplegable: el gran cola Yamaha C5, una cola brillante, una cola amplificada, piano de bar, dos eléctricos, clavecín, clavinet, celesta y caja de música. Cada uno se descarga la primera vez que lo eliges y los últimos que hayas usado quedan listos al instante.</li>
+      <li><b>Ruido de teclas</b> es el clic mecánico real de la tecla al soltarla. Va muy bajo a propósito, pero si te molesta ponla en cero y desaparece.</li>
+      <li><b>Calidad</b> decide cuántas capas de dinámica se descargan del gran cola: cuatro suenan mejor pero ocupan unos 560 MB de memoria, y una sola baja a 150 MB. Se ajusta sola según tu equipo y puedes cambiarla cuando quieras.</li>
+      <li><b>Dinámica</b> ajusta cuánto responde a la fuerza, <b>Brillo</b> abre o cierra el tono y <b>Afinación estirada</b> imita la afinación de un piano de cola, con los graves algo bajos y los agudos algo altos.</li>
       <li><b>Sala</b> elige el ambiente, y si dejas activado «pasar por los efectos» puedes añadirle el eco, el chorus o la distorsión del sintetizador.</li>
       <li>Todo lo demás sigue funcionando igual: análisis de acordes, sugerencias, arpegio, loop, pads y caja de ritmos.</li>
     </ul>

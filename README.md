@@ -11,12 +11,27 @@ Sintetizador, detector de acordes y laboratorio de armonía para el **M-VAVE SMK
 ### Dos instrumentos
 
 - **Sintetizador**: el motor de síntesis sustractiva descrito abajo.
-- **Piano clásico**: un Yamaha C5 muestreado, el *Salamander Grand Piano v3* de Alexander Holm
-  (CC-BY 3.0). Treinta notas por capa, una cada tercera menor, en cuatro dinámicas, más el ruido
-  de apagador de cada una de las 88 teclas. Incluye afinación estirada, apagadores que frenan más
-  despacio en los graves, pedal de sostenido, sordina y tres ambientes de sala.
-  Las muestras (unos 23 MB) se descargan solo la primera vez que entras al modo piano, y puedes
-  empezar a tocar en cuanto llega la primera dinámica.
+- **Instrumentos muestreados**: diez teclados de verdad, con afinación estirada, apagadores que
+  frenan más despacio en los graves, pedal de sostenido, sordina y tres ambientes de sala.
+  Cada set se descarga la primera vez que lo eliges, y los últimos que hayas usado quedan
+  cargados para volver a ellos al instante.
+
+  | Instrumento | Muestras | Peso | Fuente |
+  | --- | --- | --- | --- |
+  | Gran cola Yamaha C5 | 30 notas × 4 dinámicas + 88 ruidos de tecla | 23 MB | Salamander Grand Piano v3 (CC-BY 3.0) |
+  | Cola brillante | 88 notas | 2,2 MB | FluidR3 GM (MIT) |
+  | Cola amplificado | 88 notas | 1,7 MB | FluidR3 GM |
+  | Piano de bar | 88 notas | 2,1 MB | FluidR3 GM |
+  | Piano eléctrico Rhodes | 88 notas | 1,8 MB | FluidR3 GM |
+  | Piano eléctrico FM | 88 notas | 2,0 MB | FluidR3 GM |
+  | Clavecín | 88 notas | 1,9 MB | FluidR3 GM |
+  | Clavinet | 88 notas | 1,9 MB | FluidR3 GM |
+  | Celesta | 88 notas | 1,4 MB | FluidR3 GM |
+  | Caja de música | 88 notas | 1,5 MB | FluidR3 GM |
+
+  El gran cola tiene un control de **calidad** que decide cuántas capas de dinámica se descargan:
+  cuatro suenan mejor pero ocupan unos 560 MB de memoria ya descodificada, dos bajan a 290 MB y
+  una a 150 MB. Se ajusta solo según la memoria y el tamaño de pantalla del equipo.
 
 El resto de la aplicación funciona igual con cualquiera de los dos: análisis de acordes,
 sugerencias, arpegio, looper, pads y caja de ritmos.
@@ -128,17 +143,23 @@ Cada push a `main` dispara el flujo de `.github/workflows/pages.yml`, que sube e
 
 ## Créditos y licencias
 
-El código es de este repositorio. Las muestras del piano son el
-[**Salamander Grand Piano v3**](https://archive.org/details/SalamanderGrandPianoV3) de
-**Alexander Holm**, publicadas bajo [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/);
-los MP3 incluidos vienen del proyecto [@tonejs/piano](https://github.com/tambien/Piano) de
-Yotam Mann (código MIT), que recortó y codificó los originales. Los detalles están en
-[`audio/piano/CREDITOS.md`](audio/piano/CREDITOS.md).
+El código es de este repositorio. Las muestras vienen de dos proyectos libres:
+
+- El **gran cola** es el [Salamander Grand Piano v3](https://archive.org/details/SalamanderGrandPianoV3)
+  de **Alexander Holm**, bajo [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/). Los MP3
+  incluidos vienen del proyecto [@tonejs/piano](https://github.com/tambien/Piano) de Yotam Mann
+  (código MIT), que recortó y codificó los originales.
+- Los **otros nueve teclados** salen del soundfont **FluidR3 GM**, empaquetado como MP3 por
+  Benjamin Gleitzman en [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts) (MIT).
+
+Los detalles están en [`audio/piano/CREDITOS.md`](audio/piano/CREDITOS.md) y
+[`audio/gm/CREDITOS.md`](audio/gm/CREDITOS.md).
 
 ## Estructura
 
 ```
 audio/piano/        Muestras del Salamander Grand Piano (CC-BY 3.0)
+audio/gm/           Teclados del soundfont FluidR3 GM (MIT)
 index.html          Estructura mínima; la interfaz se construye desde JavaScript
 css/style.css       Estilos, temas claro y oscuro
 js/theory.js        Notas, acordes, escalas, tonalidad, grados y sugerencias
@@ -147,7 +168,8 @@ js/midi.js          Web MIDI: dispositivos y parseo de mensajes
 js/controller.js    Mapa del SMK-25, destinos asignables y MIDI Learn
 js/arp.js           Reloj, arpegiador, secuenciador y looper
 js/presets.js       Presets de fábrica y generador aleatorio
-js/sampler.js       Piano clásico por muestras (Salamander Grand Piano)
+js/sampler.js       Reproductor de instrumentos muestreados
+js/instruments.js   Catálogo de sets de muestras y niveles de calidad
 js/piano.js         Teclado virtual en SVG
 js/visualizer.js    Osciloscopio y espectro
 js/ui.js            Perillas, círculo de quintas, avisos y modales
