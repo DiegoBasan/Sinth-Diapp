@@ -44,6 +44,36 @@ function trimTail(ctx, buf) {
   return out;
 }
 
+// Las muestras sostenidas (cuerdas, pads) acaban de golpe a pleno volumen a los
+// tres segundos. Para que aguanten mientras se pulse la tecla se reproducen en
+// bucle, y para que el salto no suene se funde el final del bucle con lo que
+// hay justo antes del punto de retorno: al llegar al final, la onda ya coincide
+// con la que sigue en el punto de entrada.
+const LOOP_START_FRAC = 0.45;   // dónde empieza el bucle dentro de la muestra
+const LOOP_GUARD = 0.02;        // no se usa el último tramo del archivo
+const LOOP_XFADE = 0.14;        // duración del fundido de la costura
+
+function buildLoop(ctx, buf) {
+  const sr = buf.sampleRate;
+  const n = buf.length;
+  const guard = Math.floor(LOOP_GUARD * sr);
+  const loopEnd = n - guard;
+  const loopStart = Math.floor(n * LOOP_START_FRAC);
+  const xf = Math.min(Math.floor(LOOP_XFADE * sr), loopStart, Math.floor((loopEnd - loopStart) / 2));
+  if (xf < 64 || loopEnd - loopStart < sr * 0.2) return null; // muestra demasiado corta
+  const out = ctx.createBuffer(buf.numberOfChannels, n, sr);
+  for (let c = 0; c < buf.numberOfChannels; c++) {
+    const src = buf.getChannelData(c);
+    const dst = out.getChannelData(c);
+    dst.set(src);
+    for (let k = 0; k < xf; k++) {
+      const t = (k / xf) * (Math.PI / 2);      // fundido de potencia constante
+      dst[loopEnd - xf + k] = src[loopEnd - xf + k] * Math.cos(t) + src[loopStart - xf + k] * Math.sin(t);
+    }
+  }
+  return { buffer: out, loopStart: loopStart / sr, loopEnd: loopEnd / sr };
+}
+
 function bufferBytes(map) {
   let n = 0;
   for (const b of map.values()) n += b.length * b.numberOfChannels * 4;
@@ -64,8 +94,8 @@ class SampleVoice {
     this.disposed = false;
     this.startTime = time;
 
+    this.peak = pick.gain * sampler.opts.gain;
     this.gain = ctx.createGain();
-    this.gain.gain.value = pick.gain * sampler.opts.gain;
     this.gain.connect(sampler.noteBus);
 
     this.src = ctx.createBufferSource();
@@ -74,23 +104,44 @@ class SampleVoice {
     // Afinación estirada: los pianos reales tensan los agudos y aflojan los graves.
     this.src.detune.value = sampler.stretchCents(note) + (sampler.bendCents || 0);
     this.src.connect(this.gain);
+
+    this.looping = !!pick.loop;
+    if (this.looping) {
+      this.src.loop = true;
+      this.src.loopStart = pick.loop.loopStart;
+      this.src.loopEnd = pick.loop.loopEnd;
+    }
+
+    // La muestra ya trae su propio ataque; esto solo añade el que pida el
+    // instrumento o el intérprete, para entradas más suaves.
+    const atk = sampler.opts.attack || 0;
+    if (atk > 0.004) {
+      this.gain.gain.setValueAtTime(0.0001, time);
+      this.gain.gain.linearRampToValueAtTime(this.peak, time + atk);
+    } else {
+      this.gain.gain.setValueAtTime(this.peak, time);
+    }
+
     this.src.start(time);
     this.src.onended = () => this.dispose();
-    this.endsAt = time + (pick.buffer.duration / pick.rate);
+    this.endsAt = this.looping ? Infinity : time + (pick.buffer.duration / pick.rate);
   }
 
-  // Al soltar, los apagadores frenan la cuerda: cuanto más grave, más tarda.
+  // Al soltar: en el piano mandan los apagadores, que frenan más despacio cuanto
+  // más grave es la cuerda; en los demás, la caída que pida el instrumento.
   release(time) {
     if (this.released) return;
     this.released = true;
     this.sustained = false;
-    const tc = this.sampler.damperTime(this.note);
+    const inst = this.sampler.instrument;
+    const rel = this.sampler.opts.release;
+    const tc = (rel != null ? rel : (inst.release != null ? inst.release : null)) ?? this.sampler.damperTime(this.note);
     const g = this.gain.gain;
     const now = Math.max(time, this.sampler.ctx.currentTime);
     if (typeof g.cancelAndHoldAtTime === 'function') g.cancelAndHoldAtTime(now);
     else { const v = g.value; g.cancelScheduledValues(now); g.setValueAtTime(v, now); }
-    g.setTargetAtTime(0, now, tc);
-    const stopAt = now + tc * 7 + 0.05;
+    g.setTargetAtTime(0, now, tc / 3);
+    const stopAt = now + tc * 3 + 0.08;
     try { this.src.stop(Math.min(stopAt, this.endsAt + 0.1)); } catch (e) { /* ya terminó */ }
     setTimeout(() => this.dispose(), Math.max(0, (stopAt - this.sampler.ctx.currentTime) * 1000 + 60));
   }
@@ -122,6 +173,7 @@ export class SampleInstrument extends EventTarget {
     super();
     this.ctx = ctx;
     this.buffers = new Map();   // "C4v11" o "C4" -> AudioBuffer
+    this.loops = new Map();     // misma clave -> { loopStart, loopEnd } en segundos
     this.releases = new Map();  // midi -> AudioBuffer del clic de tecla
     this.cache = new Map();     // id -> { buffers, releases }  (los 3 últimos)
     this.voices = [];
@@ -137,7 +189,7 @@ export class SampleInstrument extends EventTarget {
     this.quality = suggestQuality();
     this.activeLayers = null;
     this.dirty = false;   // la calidad cambió: hay que rehacer la carga
-    this.opts = { gain: 1, tone: 12000, releaseNoise: 1, stretch: 0.5, dynamics: 1 };
+    this.opts = { gain: 1, tone: 12000, releaseNoise: 1, stretch: 0.5, dynamics: 1, attack: 0, release: null };
 
     this.out = ctx.createGain();
     this.noteBus = ctx.createGain();
@@ -158,6 +210,7 @@ export class SampleInstrument extends EventTarget {
   // Carga
   // -------------------------------------------------------------------------
   applyDefaults() {
+    this.opts.release = null; // vuelve a mandar la caída propia del instrumento
     for (const [k, v] of Object.entries(this.instrument.defaults || {})) this.setOption(k, v);
   }
 
@@ -178,6 +231,7 @@ export class SampleInstrument extends EventTarget {
       this.cache.delete(inst.id);
       this.cache.set(inst.id, cached); // vuelve al final de la cola de descarte
       this.buffers = cached.buffers;
+      this.loops = cached.loops;
       this.releases = cached.releases;
       this.ready = true;
       this.progress = 1;
@@ -188,6 +242,7 @@ export class SampleInstrument extends EventTarget {
 
     this.loading = true;
     this.buffers = new Map();
+    this.loops = new Map();
     this.releases = new Map();
 
     const jobs = [];
@@ -211,9 +266,16 @@ export class SampleInstrument extends EventTarget {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const raw = await this.ctx.decodeAudioData(await res.arrayBuffer());
         if (token !== this.loadToken) return;
-        const buf = trimTail(this.ctx, raw);
-        if (job.rel != null) this.releases.set(job.rel, buf);
-        else this.buffers.set(job.key, buf);
+        if (job.rel != null) {
+          this.releases.set(job.rel, trimTail(this.ctx, raw));
+        } else if (inst.sustain) {
+          // La cola es justo lo que se reproduce en bucle: no se recorta.
+          const loop = buildLoop(this.ctx, raw);
+          this.buffers.set(job.key, loop ? loop.buffer : raw);
+          if (loop) this.loops.set(job.key, { loopStart: loop.loopStart, loopEnd: loop.loopEnd });
+        } else {
+          this.buffers.set(job.key, trimTail(this.ctx, raw));
+        }
       } catch (e) {
         this.dispatchEvent(new CustomEvent('sampleerror', { detail: { url: job.url, message: e.message } }));
       }
@@ -246,7 +308,7 @@ export class SampleInstrument extends EventTarget {
     const bytes = bufferBytes(this.buffers) + bufferBytes(this.releases);
     this.cache.delete(id);
     if (bytes > CACHE_BUDGET) return;
-    this.cache.set(id, { buffers: this.buffers, releases: this.releases, bytes });
+    this.cache.set(id, { buffers: this.buffers, loops: this.loops, releases: this.releases, bytes });
     let total = 0;
     for (const e of this.cache.values()) total += e.bytes;
     while (total > CACHE_BUDGET && this.cache.size > 1) {
@@ -294,7 +356,7 @@ export class SampleInstrument extends EventTarget {
     const midi = clamp(Math.round(note), inst.lowest, inst.highest);
     const v = clamp(velocity, 1, 127);
     const curved = Math.pow(v / 127, this.opts.dynamics) * 127;
-    const soft = this.softPedal ? 0.62 : 1;
+    const soft = (this.softPedal ? 0.62 : 1) * (inst.trim || 1);
 
     let layer = null;
     let suffix = '';
@@ -336,6 +398,7 @@ export class SampleInstrument extends EventTarget {
 
     return {
       buffer: this.buffers.get(best.key),
+      loop: this.loops.get(best.key) || null,
       rate: Math.pow(2, (midi - best.midi) / 12),
       gain: gain * soft,
       layer,

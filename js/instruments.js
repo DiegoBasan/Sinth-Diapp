@@ -24,14 +24,33 @@ const SALAMANDER_NOTES = ['A0', 'C1', 'Ds1', 'Fs1', 'A1', 'C2', 'Ds2', 'Fs2', 'A
 
 const GM_CREDIT = 'Soundfont FluidR3 GM, empaquetado por Benjamin Gleitzman (MIT)';
 
+export const FAMILIES = {
+  teclado: 'Teclados',
+  cuerda: 'Cuerdas',
+};
+
 // Un instrumento del soundfont: 88 notas, una capa, sin ruido de teclado.
-const gm = (id, name, dir, size, tone, opts = {}) => ({
-  id, name, dir: `audio/gm/${dir}/`, kind: 'chromatic', family: opts.family || 'piano',
+// `sustain` marca los que no se apagan solos: sus muestras duran tres segundos
+// y siguen a pleno volumen al final, así que se reproducen en bucle.
+const gm = (id, name, folder, size, tone, opts = {}) => ({
+  id, name, dir: `audio/${opts.root || 'gm'}/${folder}/`, kind: 'chromatic', family: opts.family || 'teclado',
   notes: allKeys(true), layers: null, releases: 0, lowest: 21, highest: 108,
   size, credit: GM_CREDIT, license: 'MIT',
-  defaults: { tone, stretch: 0, releaseNoise: 0, dynamics: 1, gain: opts.gain || 1 },
+  // Los sets del soundfont están grabados mucho más bajos que el gran cola.
+  // `trim` los iguala para que cambiar de instrumento no sea un susto.
+  trim: opts.trim || 1,
+  sustain: !!opts.sustain,
+  release: opts.release != null ? opts.release : null,
+  defaults: {
+    tone, stretch: 0, releaseNoise: 0, dynamics: opts.dynamics || 1, gain: opts.gain || 1,
+    attack: opts.attack || 0,
+  },
   note: opts.note || '',
 });
+
+// Atajo para la familia de cuerdas, que vive en su propia carpeta.
+const str = (id, name, folder, size, tone, opts = {}) =>
+  gm(id, name, folder, size, tone, { ...opts, root: 'strings', family: 'cuerda' });
 
 export const INSTRUMENTS = [
   {
@@ -39,7 +58,7 @@ export const INSTRUMENTS = [
     name: 'Gran cola Yamaha C5',
     dir: 'audio/piano/',
     kind: 'layered',
-    family: 'piano',
+    family: 'teclado',
     notes: SALAMANDER_NOTES,
     layers: [
       { id: 3, vel: 20, name: 'pianissimo' },
@@ -53,18 +72,43 @@ export const INSTRUMENTS = [
     size: '23 MB',
     credit: 'Salamander Grand Piano v3 de Alexander Holm (CC-BY 3.0), en los MP3 de @tonejs/piano',
     license: 'CC-BY 3.0',
-    defaults: { tone: 12000, stretch: 0.5, releaseNoise: 1, dynamics: 1, gain: 1 },
+    sustain: false,
+    release: null,
+    trim: 1,
+    defaults: { tone: 12000, stretch: 0.5, releaseNoise: 1, dynamics: 1, gain: 1, attack: 0 },
     note: 'Cuatro capas de dinámica y el ruido real de cada tecla. Es el de mejor calidad y el más pesado.',
   },
-  gm('bright', 'Cola brillante', 'bright_acoustic_piano', '2,2 MB', 14000, { note: 'Más presencia en los agudos, va bien con banda.' }),
-  gm('grand-e', 'Cola amplificado', 'electric_grand_piano', '1,7 MB', 12000, { note: 'El sonido de un cola con pastillas, tipo Yamaha CP.' }),
-  gm('honkytonk', 'Piano de bar', 'honkytonk_piano', '2,1 MB', 11000, { note: 'Desafinado a propósito, para ragtime y country.' }),
-  gm('rhodes', 'Piano eléctrico Rhodes', 'electric_piano_1', '1,8 MB', 13000, { note: 'Campanas suaves. El clásico del soul y la bossa.' }),
-  gm('fm-piano', 'Piano eléctrico FM', 'electric_piano_2', '2,0 MB', 15000, { note: 'El eléctrico digital de los ochenta, brillante y cristalino.' }),
-  gm('harpsichord', 'Clavecín', 'harpsichord', '1,9 MB', 16000, { family: 'teclado', note: 'Cuerdas pulsadas: no responde a la fuerza, como el instrumento real.' }),
-  gm('clavinet', 'Clavinet', 'clavinet', '1,9 MB', 14000, { family: 'teclado', note: 'Percutido y funky, para líneas rítmicas.' }),
-  gm('celesta', 'Celesta', 'celesta', '1,4 MB', 16000, { family: 'percusión', note: 'Láminas metálicas: dulce y cristalina en los agudos.' }),
-  gm('musicbox', 'Caja de música', 'music_box', '1,5 MB', 16000, { family: 'percusión', note: 'Pequeña y de cuerda, con mucho carácter.' }),
+  gm('bright', 'Cola brillante', 'bright_acoustic_piano', '2,2 MB', 14000, { trim: 5.1, note: 'Más presencia en los agudos, va bien con banda.' }),
+  gm('grand-e', 'Cola amplificado', 'electric_grand_piano', '1,7 MB', 12000, { trim: 3.8, note: 'El sonido de un cola con pastillas, tipo Yamaha CP.' }),
+  gm('honkytonk', 'Piano de bar', 'honkytonk_piano', '2,1 MB', 11000, { trim: 4.8, note: 'Desafinado a propósito, para ragtime y country.' }),
+  gm('rhodes', 'Piano eléctrico Rhodes', 'electric_piano_1', '1,8 MB', 13000, { trim: 3.3, note: 'Campanas suaves. El clásico del soul y la bossa.' }),
+  gm('fm-piano', 'Piano eléctrico FM', 'electric_piano_2', '2,0 MB', 15000, { trim: 4.3, note: 'El eléctrico digital de los ochenta, brillante y cristalino.' }),
+  gm('harpsichord', 'Clavecín', 'harpsichord', '1,9 MB', 16000, { trim: 3.6, note: 'Cuerdas pulsadas: no responde a la fuerza, como el instrumento real.' }),
+  gm('clavinet', 'Clavinet', 'clavinet', '1,9 MB', 14000, { trim: 2.6, note: 'Percutido y funky, para líneas rítmicas.' }),
+  gm('celesta', 'Celesta', 'celesta', '1,4 MB', 16000, { trim: 3.5, note: 'Láminas metálicas: dulce y cristalina en los agudos.' }),
+  gm('musicbox', 'Caja de música', 'music_box', '1,5 MB', 16000, { trim: 3.2, note: 'Pequeña y de cuerda, con mucho carácter.' }),
+
+  // --- Cuerdas ---
+  str('strings', 'Cuerdas de orquesta', 'string_ensemble_1', '2,3 MB', 11000,
+    { trim: 3.7, sustain: true, release: 0.5, attack: 0.05, note: 'La sección entera, con ataque suave. Aguanta todo lo que la mantengas pulsada.' }),
+  str('strings-warm', 'Cuerdas cálidas', 'string_ensemble_2', '2,3 MB', 9000,
+    { trim: 2.7, sustain: true, release: 0.7, attack: 0.16, note: 'Más lenta y envolvente, para acordes largos y fondos.' }),
+  str('strings-synth', 'Cuerdas sintéticas', 'synth_strings_1', '2,4 MB', 12000,
+    { trim: 2.7, sustain: true, release: 0.6, attack: 0.1, note: 'El pad de cuerdas de sintetizador, más plano y sin aire de sala.' }),
+  str('tremolo', 'Cuerdas en trémolo', 'tremolo_strings', '2,3 MB', 12000,
+    { trim: 3.3, sustain: true, release: 0.35, attack: 0.03, note: 'Arcos temblando: tensión de banda sonora.' }),
+  str('pizzicato', 'Pizzicato', 'pizzicato_strings', '1,7 MB', 14000,
+    { trim: 2.4, release: 0.25, note: 'Cuerdas pellizcadas con el dedo. Corto y seco, va muy bien con la caja de ritmos.' }),
+  str('violin', 'Violín', 'violin', '2,4 MB', 13000,
+    { trim: 3.2, sustain: true, release: 0.4, attack: 0.06, note: 'Un solo violín, con su vibrato.' }),
+  str('viola', 'Viola', 'viola', '2,3 MB', 12000,
+    { trim: 3.0, sustain: true, release: 0.4, attack: 0.06, note: 'Entre el violín y el chelo, con un color más oscuro.' }),
+  str('cello', 'Violonchelo', 'cello', '2,5 MB', 11000,
+    { trim: 2.8, sustain: true, release: 0.45, attack: 0.07, note: 'Voz grave y cantada. Perfecto para melodías con la mano izquierda.' }),
+  str('contrabass', 'Contrabajo', 'contrabass', '1,9 MB', 9000,
+    { trim: 3.4, sustain: true, release: 0.5, attack: 0.08, note: 'El fondo de la sección: sostiene los graves sin embarrar.' }),
+  str('harp', 'Arpa', 'orchestral_harp', '1,6 MB', 15000,
+    { trim: 4.1, release: 0.6, note: 'Cuerdas pulsadas que resuenan solas. Ideal con el arpegio activado.' }),
 ];
 
 export const INSTRUMENT_BY_ID = Object.fromEntries(INSTRUMENTS.map((i) => [i.id, i]));

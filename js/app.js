@@ -10,7 +10,7 @@ import { Clock, ARP_MODES, ARP_DIV_LIST, DRUM_PATTERNS, DRUM_STEPS, emptyPattern
 import { Piano } from './piano.js';
 import { Visualizer } from './visualizer.js';
 import { SampleInstrument } from './sampler.js';
-import { INSTRUMENTS, INSTRUMENT_BY_ID, DEFAULT_INSTRUMENT, maxStretch, QUALITY, layersFor } from './instruments.js';
+import { INSTRUMENTS, INSTRUMENT_BY_ID, DEFAULT_INSTRUMENT, maxStretch, QUALITY, layersFor, FAMILIES } from './instruments.js';
 import { h, $, $$, Knob, CircleOfFifths, toast, openModal } from './ui.js';
 
 const STORE = 'mvave-synth-lab-v1';
@@ -146,7 +146,7 @@ function buildTopbar() {
       h('div', {}, h('h1', { text: 'MVAVE Synth Lab' }), h('small', { text: 'SMK-25 · Web MIDI' }))),
     h('div', { class: 'seg instrument-seg', id: 'instrumentSeg' },
       h('button', { class: 'on', dataset: { inst: 'synth' }, title: 'Sintetizador (tecla I)', text: '🎛 Sinte', onclick: () => setSoundMode('synth') }),
-      h('button', { dataset: { inst: 'piano' }, title: 'Piano clásico muestreado (tecla I)', text: '🎹 Piano', onclick: () => setSoundMode('piano') })),
+      h('button', { dataset: { inst: 'piano' }, title: 'Instrumentos muestreados: pianos y cuerdas (tecla I)', text: '🎹 Muestras', onclick: () => setSoundMode('piano') })),
     h('div', { class: 'status-dot', id: 'midiDot' }),
     h('span', { class: 'status-text', id: 'midiStatus', text: 'Sin iniciar' }),
     h('select', { id: 'midiDevice', title: 'Dispositivo MIDI de entrada', onchange: (e) => state.midi && state.midi.select(e.target.value) },
@@ -207,11 +207,12 @@ function buildLayout() {
         h('button', { class: 'btn sm', text: '✨ Generar', onclick: generateProgression })),
     ], { id: 'panelProg' }),
 
-    panel('Instrumentos muestreados', 'Diez teclados reales, del gran cola a la caja de música', [
+    panel('Instrumentos muestreados', 'Teclados y cuerdas, del gran cola a la sección de orquesta', [
       h('div', { class: 'ctl' },
         h('span', { class: 'lbl', text: 'Instrumento' }),
         h('select', { id: 'instrumentSel', onchange: (e) => pickInstrument(e.target.value) },
-          INSTRUMENTS.map((i) => h('option', { value: i.id, text: `${i.name} · ${i.size}` }))),
+          Object.entries(FAMILIES).map(([fam, label]) => h('optgroup', { label },
+            INSTRUMENTS.filter((i) => i.family === fam).map((i) => h('option', { value: i.id, text: `${i.name} · ${i.size}` }))))),
         h('button', { class: 'btn sm', title: 'Probar un acorde con este instrumento', text: '▶', onclick: auditionInstrument })),
       h('div', { class: 'inst-note', id: 'instrumentNote' }),
       h('div', { class: 'piano-status', id: 'pianoStatus' },
@@ -522,24 +523,39 @@ function zoomPiano(dir) {
 // ---------------------------------------------------------------------------
 // Piano clásico por muestras
 // ---------------------------------------------------------------------------
+const secs = (v) => (v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`);
+
+// Cada instrumento enseña solo los mandos que le afectan: no tiene sentido una
+// perilla de apagadores en unas cuerdas ni una de caída en un piano, donde la
+// marcan los propios apagadores nota a nota.
 const PIANO_OPTS = [
   { key: 'gain', label: 'Volumen', min: 0, max: 1.6, fmt: (v) => `${Math.round(v * 100)}%` },
   { key: 'tone', label: 'Brillo', min: 900, max: 18000, curve: 'exp', fmt: (v) => v >= 1000 ? `${(v / 1000).toFixed(1)} kHz` : `${Math.round(v)} Hz` },
   { key: 'dynamics', label: 'Dinámica', min: 0.5, max: 2.2, fmt: (v) => v.toFixed(2) },
-  { key: 'releaseNoise', label: 'Ruido de teclas', min: 0, max: 3, fmt: (v) => v <= 0.001 ? 'apagado' : `${Math.round(v * 100)}%` },
-  { key: 'stretch', label: 'Afinación estirada', min: 0, max: 1.5, fmt: (v) => `${Math.round(v * 100)}%` },
+  { key: 'attack', label: 'Ataque', min: 0, max: 1.5, curve: 'sq', fmt: (v) => v < 0.005 ? 'directo' : secs(v) },
+  { key: 'release', label: 'Caída', min: 0.03, max: 3, curve: 'exp', fmt: secs, when: (i) => i.release != null },
+  { key: 'releaseNoise', label: 'Ruido de teclas', min: 0, max: 3, fmt: (v) => v <= 0.001 ? 'apagado' : `${Math.round(v * 100)}%`, when: (i) => i.releases > 0 },
+  { key: 'stretch', label: 'Afinación estirada', min: 0, max: 1.5, fmt: (v) => `${Math.round(v * 100)}%`, when: (i) => i.kind === 'layered' },
 ];
 
 function buildPianoKnobs() {
   const host = $('#pianoKnobs');
+  const inst = state.sampler.instrument;
   host.innerHTML = '';
   state.pianoKnobs = [];
   for (const o of PIANO_OPTS) {
-    const toVal = (x) => o.curve === 'exp' ? o.min * Math.pow(o.max / o.min, x) : o.min + (o.max - o.min) * x;
-    const to01 = (v) => o.curve === 'exp' ? Math.log(v / o.min) / Math.log(o.max / o.min) : (v - o.min) / (o.max - o.min);
+    if (o.when && !o.when(inst)) continue;
+    const toVal = (x) => o.curve === 'exp' ? o.min * Math.pow(o.max / o.min, x)
+      : o.curve === 'sq' ? o.min + (o.max - o.min) * x * x
+        : o.min + (o.max - o.min) * x;
+    const to01 = (v) => o.curve === 'exp' ? Math.log(Math.max(v, o.min) / o.min) / Math.log(o.max / o.min)
+      : o.curve === 'sq' ? Math.sqrt(Math.max(0, (v - o.min) / (o.max - o.min)))
+        : (v - o.min) / (o.max - o.min);
+    // La caída arranca en la que trae el instrumento hasta que se toca la perilla.
+    const current = o.key === 'release' && state.sampler.opts.release == null ? inst.release : state.sampler.opts[o.key];
     const k = new Knob({
       label: o.label,
-      value: to01(state.sampler.opts[o.key]),
+      value: to01(current ?? o.min),
       format: (x) => o.fmt(toVal(x)),
       onChange: (x) => state.sampler.setOption(o.key, toVal(x)),
     });
@@ -647,7 +663,11 @@ function describeInstrument(inst) {
   const ficha = partes.join(' · ');
   $('#instrumentNote').textContent = `${inst.note} ${ficha.charAt(0).toUpperCase()}${ficha.slice(1)}.`.trim();
   $('#instrumentCredit').innerHTML = `Muestras: ${inst.credit}. Licencia ${inst.license}.`;
-  $('#pianoQuality').disabled = !inst.layers;
+  const q = $('#pianoQuality');
+  q.disabled = !inst.layers;
+  q.title = inst.layers
+    ? 'Cuántas capas de dinámica se descargan de este set'
+    : 'Solo se aplica a los sets con varias dinámicas, como el gran cola';
   updateMemChip();
 }
 
@@ -1528,13 +1548,15 @@ function showHelp() {
       <li><b>Cambiar preset</b> y <b>Transporte</b> (arpegio, retener, loop, metrónomo, octavas).</li>
     </ul>
     <p>Shift + clic sobre un pad de la pantalla para aprender la nota que envía tu pad físico.</p>
-    <h4>Piano clásico y otros teclados</h4>
+    <h4>Instrumentos muestreados</h4>
     <ul>
-      <li>El botón <b>🎹 Piano</b> de arriba (o la tecla <kbd>I</kbd>) cambia el generador de sonido: en vez del sintetizador suena un instrumento muestreado.</li>
-      <li>Hay diez instrumentos en el desplegable: el gran cola Yamaha C5, una cola brillante, una cola amplificada, piano de bar, dos eléctricos, clavecín, clavinet, celesta y caja de música. Cada uno se descarga la primera vez que lo eliges y los últimos que hayas usado quedan listos al instante.</li>
+      <li>El botón <b>🎹 Muestras</b> de arriba (o la tecla <kbd>I</kbd>) cambia el generador de sonido: en vez del sintetizador suena un instrumento grabado.</li>
+      <li>Hay veinte, en dos familias. <b>Teclados</b>: el gran cola Yamaha C5, una cola brillante, una cola amplificada, piano de bar, dos eléctricos, clavecín, clavinet, celesta y caja de música. <b>Cuerdas</b>: sección de orquesta, cuerdas cálidas, cuerdas sintéticas, trémolo, pizzicato, violín, viola, violonchelo, contrabajo y arpa.</li>
+      <li>Las cuerdas sostenidas aguantan todo lo que mantengas la tecla pulsada: sus muestras duran tres segundos y se reproducen en bucle con la costura fundida, así que el bucle no se oye.</li>
+      <li>Cada set se descarga la primera vez que lo eliges y los últimos que hayas usado quedan listos al instante.</li>
       <li><b>Ruido de teclas</b> es el clic mecánico real de la tecla al soltarla. Va muy bajo a propósito, pero si te molesta ponla en cero y desaparece.</li>
-      <li><b>Calidad</b> decide cuántas capas de dinámica se descargan del gran cola: cuatro suenan mejor pero ocupan unos 560 MB de memoria, y una sola baja a 150 MB. Se ajusta sola según tu equipo y puedes cambiarla cuando quieras.</li>
-      <li><b>Dinámica</b> ajusta cuánto responde a la fuerza, <b>Brillo</b> abre o cierra el tono y <b>Afinación estirada</b> imita la afinación de un piano de cola, con los graves algo bajos y los agudos algo altos.</li>
+      <li><b>Calidad</b> decide cuántas capas de dinámica se descargan del gran cola: cuatro suenan mejor pero ocupan unos 560 MB de memoria, y una sola baja a 150 MB. Se ajusta sola según tu equipo y puedes cambiarla cuando quieras. En los demás sets no hace nada, porque solo tienen una dinámica.</li>
+      <li>Las perillas cambian según el instrumento. <b>Dinámica</b> ajusta cuánto responde a la fuerza y <b>Brillo</b> abre o cierra el tono en todos. <b>Ataque</b> suaviza la entrada, muy útil en las cuerdas. <b>Caída</b> aparece en los instrumentos sin apagadores, y <b>Afinación estirada</b> solo en el gran cola.</li>
       <li><b>Sala</b> elige el ambiente, y si dejas activado «pasar por los efectos» puedes añadirle el eco, el chorus o la distorsión del sintetizador.</li>
       <li>Todo lo demás sigue funcionando igual: análisis de acordes, sugerencias, arpegio, loop, pads y caja de ritmos.</li>
     </ul>
@@ -1551,7 +1573,7 @@ function showHelp() {
       <tr><td><kbd>Z</kbd> / <kbd>X</kbd></td><td>Bajar / subir una octava</td></tr>
       <tr><td><kbd>C</kbd></td><td>Sostener el acorde</td></tr>
       <tr><td><kbd>V</kbd></td><td>Arpegio on/off</td></tr>
-      <tr><td><kbd>I</kbd></td><td>Cambiar entre sintetizador y piano</td></tr>
+      <tr><td><kbd>I</kbd></td><td>Cambiar entre sintetizador e instrumentos muestreados</td></tr>
       <tr><td><kbd>1</kbd>…<kbd>9</kbd></td><td>Escuchar la sugerencia n.º…</td></tr>
       <tr><td><kbd>R</kbd></td><td>Sonido aleatorio</td></tr>
       <tr><td><kbd>Espacio</kbd></td><td>Reloj on/off</td></tr>

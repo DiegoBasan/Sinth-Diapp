@@ -11,27 +11,41 @@ Sintetizador, detector de acordes y laboratorio de armonía para el **M-VAVE SMK
 ### Dos instrumentos
 
 - **Sintetizador**: el motor de síntesis sustractiva descrito abajo.
-- **Instrumentos muestreados**: diez teclados de verdad, con afinación estirada, apagadores que
-  frenan más despacio en los graves, pedal de sostenido, sordina y tres ambientes de sala.
-  Cada set se descarga la primera vez que lo eliges, y los últimos que hayas usado quedan
-  cargados para volver a ellos al instante.
+- **Instrumentos muestreados**: veinte instrumentos grabados, en dos familias. Cada set se
+  descarga la primera vez que lo eliges y los últimos que hayas usado quedan cargados para
+  volver a ellos al instante.
+
+  **Teclados**
 
   | Instrumento | Muestras | Peso | Fuente |
   | --- | --- | --- | --- |
   | Gran cola Yamaha C5 | 30 notas × 4 dinámicas + 88 ruidos de tecla | 23 MB | Salamander Grand Piano v3 (CC-BY 3.0) |
-  | Cola brillante | 88 notas | 2,2 MB | FluidR3 GM (MIT) |
-  | Cola amplificado | 88 notas | 1,7 MB | FluidR3 GM |
-  | Piano de bar | 88 notas | 2,1 MB | FluidR3 GM |
-  | Piano eléctrico Rhodes | 88 notas | 1,8 MB | FluidR3 GM |
-  | Piano eléctrico FM | 88 notas | 2,0 MB | FluidR3 GM |
-  | Clavecín | 88 notas | 1,9 MB | FluidR3 GM |
-  | Clavinet | 88 notas | 1,9 MB | FluidR3 GM |
-  | Celesta | 88 notas | 1,4 MB | FluidR3 GM |
-  | Caja de música | 88 notas | 1,5 MB | FluidR3 GM |
+  | Cola brillante, cola amplificado, piano de bar | 88 notas cada uno | 1,7 a 2,2 MB | FluidR3 GM (MIT) |
+  | Piano eléctrico Rhodes, piano eléctrico FM | 88 notas cada uno | 1,8 y 2,0 MB | FluidR3 GM |
+  | Clavecín, clavinet | 88 notas cada uno | 1,9 MB | FluidR3 GM |
+  | Celesta, caja de música | 88 notas cada uno | 1,4 y 1,5 MB | FluidR3 GM |
+
+  **Cuerdas**
+
+  | Instrumento | Muestras | Peso | Sostiene |
+  | --- | --- | --- | --- |
+  | Cuerdas de orquesta, cuerdas cálidas, cuerdas sintéticas | 88 notas cada uno | 2,3 a 2,4 MB | sí, en bucle |
+  | Cuerdas en trémolo | 88 notas | 2,3 MB | sí, en bucle |
+  | Violín, viola, violonchelo, contrabajo | 88 notas cada uno | 1,9 a 2,5 MB | sí, en bucle |
+  | Pizzicato | 88 notas | 1,7 MB | no, se apaga solo |
+  | Arpa | 88 notas | 1,6 MB | no, resuena y se apaga |
+
+  Las muestras de cuerda duran tres segundos y terminan a pleno volumen, así que se reproducen
+  en bucle: el final del bucle se funde con lo que precede al punto de retorno, de modo que la
+  costura no se oye. El salto queda por debajo del paso normal entre muestras vecinas.
 
   El gran cola tiene un control de **calidad** que decide cuántas capas de dinámica se descargan:
   cuatro suenan mejor pero ocupan unos 560 MB de memoria ya descodificada, dos bajan a 290 MB y
   una a 150 MB. Se ajusta solo según la memoria y el tamaño de pantalla del equipo.
+
+  Los mandos se adaptan al instrumento: volumen, brillo y dinámica siempre; ataque para suavizar
+  la entrada; caída en los que no tienen apagadores; ruido de teclas y afinación estirada solo
+  en el gran cola. Todos los sets están nivelados entre sí para que cambiar no dé sustos.
 
 El resto de la aplicación funciona igual con cualquiera de los dos: análisis de acordes,
 sugerencias, arpegio, looper, pads y caja de ritmos.
@@ -118,7 +132,7 @@ También funciona con el ratón sobre el piano y con el teclado de la computador
 | --- | --- |
 | `A` `W` `S` `E` `D` `F` `T` `G` `Y` `H` `U` `J` `K` … | Tocar notas |
 | `Z` / `X` | Bajar / subir una octava |
-| `I` | Cambiar entre sintetizador y piano clásico |
+| `I` | Cambiar entre sintetizador e instrumentos muestreados |
 | `C` | Sostener el acorde |
 | `V` | Arpegio |
 | `1`–`9` | Escuchar la sugerencia correspondiente |
@@ -149,17 +163,20 @@ El código es de este repositorio. Las muestras vienen de dos proyectos libres:
   de **Alexander Holm**, bajo [CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/). Los MP3
   incluidos vienen del proyecto [@tonejs/piano](https://github.com/tambien/Piano) de Yotam Mann
   (código MIT), que recortó y codificó los originales.
-- Los **otros nueve teclados** salen del soundfont **FluidR3 GM**, empaquetado como MP3 por
-  Benjamin Gleitzman en [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts) (MIT).
+- Los **otros nueve teclados** y las **diez cuerdas** salen del soundfont **FluidR3 GM**,
+  empaquetado como MP3 por Benjamin Gleitzman en
+  [midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts) (MIT).
 
-Los detalles están en [`audio/piano/CREDITOS.md`](audio/piano/CREDITOS.md) y
-[`audio/gm/CREDITOS.md`](audio/gm/CREDITOS.md).
+Los detalles están en [`audio/piano/CREDITOS.md`](audio/piano/CREDITOS.md),
+[`audio/gm/CREDITOS.md`](audio/gm/CREDITOS.md) y
+[`audio/strings/CREDITOS.md`](audio/strings/CREDITOS.md).
 
 ## Estructura
 
 ```
 audio/piano/        Muestras del Salamander Grand Piano (CC-BY 3.0)
 audio/gm/           Teclados del soundfont FluidR3 GM (MIT)
+audio/strings/      Cuerdas del soundfont FluidR3 GM (MIT)
 index.html          Estructura mínima; la interfaz se construye desde JavaScript
 css/style.css       Estilos, temas claro y oscuro
 js/theory.js        Notas, acordes, escalas, tonalidad, grados y sugerencias
